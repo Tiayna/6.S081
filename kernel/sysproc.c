@@ -119,6 +119,7 @@ sys_sysinfo(void)
   info.nproc=UnUsedProc();
   //info.freefd=UnUsedFile();
 
+  //把在内核地址src开始的len大小的数据拷贝到用户进程pagetable的虚地址dstva处
   if(copyout(p->pagetable,addr,(char*)&info,sizeof(info))<0) return -1;
   return 0;
 }
