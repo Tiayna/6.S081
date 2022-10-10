@@ -8,7 +8,7 @@
 
 struct cpu cpus[NCPU];
 
-struct proc proc[NPROC];
+struct proc proc[NPROC];    //保存着所有的进程
 
 struct proc *initproc;
 
@@ -255,12 +255,13 @@ growproc(int n)
 
 // Create a new process, copying the parent.
 // Sets up child kernel stack to return as if from fork() system call.
+//父进程启动trace后，子进程也应该开启trace，并且继承进程的mask（入参）
 int
 fork(void)
 {
   int i, pid;
-  struct proc *np;
-  struct proc *p = myproc();
+  struct proc *np;    //子进程
+  struct proc *p = myproc();   //当前父进程
 
   // Allocate process.
   if((np = allocproc()) == 0){
@@ -277,6 +278,7 @@ fork(void)
 
   np->parent = p;
 
+  np->mask=p->mask;    //子进程继承父进程的追踪mask值
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -693,3 +695,35 @@ procdump(void)
     printf("\n");
   }
 }
+
+//计算空闲进程数量
+uint64
+UnUsedProc(void)
+{
+  uint64 Num_UnUsedProc = 0;    //记录空闲进程数量
+  struct proc *p;    //用于遍历所有进程的指针
+
+  for(p=proc;p<&proc[NPROC];p++)
+  {
+    if(p->state!=UNUSED) Num_UnUsedProc++;
+  }
+
+  return Num_UnUsedProc;
+}
+
+// //计算可用文件描述符数量
+// uint64
+// UnUsedFile(void)
+// {
+//   uint64 Num_UnUsedFile=0;
+//   struct proc* p;
+
+//   for(p=proc;proc<&proc[NPROC];p++)
+//   {
+//     for(int i=0;i<NOFILE;i++)
+//     {
+//       if(p->ofile[i]->type==FD_NONE) Num_UnUsedFile++;
+//     }
+//   }
+//   return Num_UnUsedFile;
+// }

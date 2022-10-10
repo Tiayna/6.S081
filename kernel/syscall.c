@@ -105,6 +105,10 @@ extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
 
+extern uint64 sys_trace(void);
+extern uint64 sys_sysinfo(void);
+
+//函数调用接口数组
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
 [SYS_exit]    sys_exit,
@@ -127,17 +131,36 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_trace] sys_trace,
+[SYS_sysinfo] sys_sysinfo,
 };
 
 void
 syscall(void)
 {
+
+  //修改所有系统调用的入口函数，让它根据进程的mask输出对应的值
+  //系统调用对应名字的数组
+  char const *syscall_names[] = {"fork", "exit", "wait", "pipe", "read",
+  "kill", "exec", "fstat", "chdir", "dup", "getpid", "sbrk", "sleep",
+  "uptime", "open", "write", "mknod", "unlink", "link", "mkdir","close","trace","sysinfo"};
+
   int num;
   struct proc *p = myproc();
 
-  num = p->trapframe->a7;
+  num = p->trapframe->a7;    //通过a7寄存器知道现在要处理的系统调用序号
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
-    p->trapframe->a0 = syscalls[num]();
+    int arg0;
+    argint(0,&arg0);    //系统调用的第一个参数
+
+    p->trapframe->a0 = syscalls[num]();      //相应的系统调用与寄存器a0传参（函数返回值）
+
+    if(p->mask & (1<<num))  //mask和1<<num做按位与操作（示例中的32和1<<5按位与），实现按位trace追踪 （关键实现）
+    {
+      //打印格式：PID: sys_$name(arg0) -> return_value
+      printf("%d: sys_%s(%d) -> %d \n",p->pid, syscall_names[num-1], arg0, p->trapframe->a0);
+    }
+    
   } else {
     printf("%d %s: unknown sys call %d\n",
             p->pid, p->name, num);

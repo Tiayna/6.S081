@@ -3,6 +3,7 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
+//trace 系统调用
 int
 main(int argc, char *argv[])
 {

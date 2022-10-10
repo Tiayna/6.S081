@@ -1,7 +1,7 @@
 struct stat;
 struct rtcdate;
 
-// system calls
+// system calls    （用户程序调用）
 int fork(void);
 int exit(int) __attribute__((noreturn));
 int wait(int*);
@@ -23,6 +23,11 @@ int getpid(void);
 char* sbrk(int);
 int sleep(int);
 int uptime(void);
+
+int trace(int mask);    //系统调用信息打印
+
+struct sysinfo;
+int sysinfo(struct sysinfo *);
 
 // ulib.c
 int stat(const char*, struct stat*);

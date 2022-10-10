@@ -8,13 +8,15 @@ print "#include \"kernel/syscall.h\"\n";
 
 sub entry {
     my $name = shift;
+    # print内容为RISC-V指令集
     print ".global $name\n";
     print "${name}:\n";
     print " li a7, SYS_${name}\n";
-    print " ecall\n";
-    print " ret\n";
+    print " ecall\n";     # 转入操作系统内核
+    print " ret\n";        # 内核执行完返回用户程序
 }
 	
+#要增加新的系统调用时，不要修改usys.S，而是参考其他系统调用接口来修改usys.pl
 entry("fork");
 entry("exit");
 entry("wait");
@@ -36,3 +38,6 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+
+entry("trace");
+entry("sysinfo");
