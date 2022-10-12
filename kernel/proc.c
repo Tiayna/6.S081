@@ -33,7 +33,7 @@ procinit(void)
 
       // Allocate a page for the process's kernel stack.
       // Map it high in memory, followed by an invalid
-      // guard page.
+      // guard page.   内核栈初始化
       char *pa = kalloc();
       if(pa == 0)
         panic("kalloc");
@@ -115,11 +115,29 @@ found:
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  if(p->pagetable == 0)
+  {
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+  // An empty user kernel page table.   
+  // 初始化用户内核页面表
+  p->kpagetable=ukvminit();
+  if(p->kpagetable==0)
+  {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  // 初始化内核栈
+  char* pa=kalloc();  //分配一段内存空间
+  if(pa==0) panic("kalloc");
+  uint64 va=KSTACK((int)(p-proc));
+  ukvmmap(p->kpagetable,va,(uint64)pa,PGSIZE,PTE_R|PTE_W);
+  p->kstack=va;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -136,11 +154,26 @@ found:
 static void
 freeproc(struct proc *p)
 {
-  if(p->trapframe)
+  if(p->trapframe)   //trapframe释放
     kfree((void*)p->trapframe);
   p->trapframe = 0;
-  if(p->pagetable)
+
+  if(p->kstack)     //内核栈释放
+  {
+    pte_t* pte=walk(p->kpagetable,p->kstack,0);
+    if(pte==0) panic("freeproc:walk ");
+    kfree((void*)PTE2PA(*pte));
+  }
+  p->kstack=0;
+
+  if(p->pagetable)   //进程用户页表释放
     proc_freepagetable(p->pagetable, p->sz);
+  p->pagetable=0;
+  
+  if(p->kpagetable)   //进程用户内核页表释放
+    proc_freekpagetable(p->kpagetable);
+  p->kpagetable=0;
+
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -150,6 +183,25 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+}
+
+void
+proc_freekpagetable(pagetable_t kpagetable)
+{
+  for(int i=0;i<512;i++)
+  {
+    pte_t pte=kpagetable[i];
+    if(pte&PTE_V)  //合法
+    {
+      kpagetable[i]=0;
+      if((pte&(PTE_R|PTE_W|PTE_X))==0)   //有更低层级的页表
+      {
+        uint64 child=PTE2PA(pte);
+        proc_freekpagetable((pagetable_t)child);
+      }
+    }
+  }
+  kfree((void*)kpagetable);
 }
 
 // Create a user page table for a given process,
@@ -230,6 +282,9 @@ userinit(void)
 
   p->state = RUNNABLE;
 
+  //将用户页表中的所有内容拷贝到用户内核页表
+  u2kvmcopy(p->pagetable,p->kpagetable,0,p->sz);
+
   release(&p->lock);
 }
 
@@ -243,12 +298,16 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if(PGROUNDUP(sz+n)>=PLIC) return -1;
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
+
+  //将用户页表中的所有内容拷贝到用户内核页表
+  u2kvmcopy(p->pagetable,p->kpagetable,0,p->sz);
   p->sz = sz;
   return 0;
 }
@@ -288,6 +347,9 @@ fork(void)
     if(p->ofile[i])
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
+
+  //子进程：将用户页表中的所有内容拷贝到用户内核页表
+  u2kvmcopy(np->pagetable,np->kpagetable,0,np->sz);   
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
@@ -473,11 +535,21 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
-        swtch(&c->context, &p->context);
+
+        // 内核页的管理使用的是 SATP 寄存器
+        // switch kernel page table   切换进程时将切换到对应进程的内核页表
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
+
+        swtch(&c->context, &p->context);   //进程调度切换
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
+
+        //调度后切换回来,在进程下CPU时要切换回原来的全局内核页表（即上面的SATP寄存器切换）
+        // switch to scheduler's kernel page table
+        kvminithart();
 
         found = 1;
       }
