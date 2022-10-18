@@ -20,17 +20,23 @@ struct run {
 
 struct {
   struct spinlock lock;
-  struct run *freelist;
-} kmem;
+  struct run *freelist;  
+} kmem[NCPU];    //将kalloc的共享freelist改为每个CPU独立的freelist
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  char buf[10];
+  for(int i=0;i<NCPU;i++)
+  {
+    snprintf(buf,10,"kmem_CPU%d",i);   //为对应序号的CPU的freelist内存分配锁写入名称
+    initlock(&kmem[i].lock,buf);    //为每个CPU的freelist初始化锁
+  }
+  // initlock(&kmem.lock, "kmem");
   freerange(end, (void*)PHYSTOP);
 }
 
-void
+void   //一段内存区域Free
 freerange(void *pa_start, void *pa_end)
 {
   char *p;
@@ -56,25 +62,49 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  push_off();   //关中断intr_off()
+  int cpu=cpuid();    //获得当前cpu的id，该过程需要关中断
+  pop_off();    //开中断intr_on()
+
+  acquire(&kmem[cpu].lock);    //通过为单个CPU分配锁，可减少锁争用tot次数
+  r->next = kmem[cpu].freelist;    //当前cpu获得内存分配锁
+  kmem[cpu].freelist = r;          //将free掉的空闲内存段插到头部
+  release(&kmem[cpu].lock);
 }
 
-// Allocate one 4096-byte page of physical memory.
+// Allocate one 4096-byte page of physical memory. 从当前CPU的freelist分配出一块空闲的4KB内存
 // Returns a pointer that the kernel can use.
 // Returns 0 if the memory cannot be allocated.
+// 若当前CPU有空闲内存块，则返回；否则，从其他cpu对应的freelist中借用一块空闲内存块
 void *
 kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  int cpu=cpuid();
+  pop_off();
+
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;
+  if(r)   //当前CPU有空闲块，直接分配后返回
+    kmem[cpu].freelist = r->next;
+  else    //否则“借用”
+  {
+    //struct run* temp;   //借来的内存块（放到当前cpu中去）
+    for(int i=0;i<NCPU;i++)
+    {
+      if(cpu==i) continue;  //跳过当前没有空闲块的cpu
+
+      acquire(&kmem[i].lock);  //遍历到的CPU内存分配上锁
+      r=kmem[i].freelist;   //分配（窃取）内存块（直接拿来使用）
+      if(r)  kmem[i].freelist=r->next;   //若不为空，则偷取到遍历到的CPU的内存块
+      release(&kmem[i].lock);  //遍历到的CPU内存分配解锁
+
+      if(r) break;  //分配成功，则结束遍历，否则继续寻找下一个有空闲内存块的CPU
+    }
+  }
+  release(&kmem[cpu].lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

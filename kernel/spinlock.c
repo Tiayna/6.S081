@@ -9,7 +9,7 @@
 #include "defs.h"
 
 #ifdef LAB_LOCK
-#define NLOCK 500
+#define NLOCK 600  //原来的500个锁不够用
 
 static struct spinlock *locks[NLOCK];
 struct spinlock lock_locks;
@@ -44,7 +44,7 @@ findslot(struct spinlock *lk) {
 #endif
 
 void
-initlock(struct spinlock *lk, char *name)
+initlock(struct spinlock *lk, char *name)    //锁类型、锁名
 {
   lk->name = name;
   lk->locked = 0;
@@ -133,7 +133,7 @@ holding(struct spinlock *lk)
 // push_off/pop_off are like intr_off()/intr_on() except that they are matched:
 // it takes two pop_off()s to undo two push_off()s.  Also, if interrupts
 // are initially off, then push_off, pop_off leaves them off.
-
+//中断interrupt开关
 void
 push_off(void)
 {
