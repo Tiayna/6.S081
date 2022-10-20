@@ -352,3 +352,12 @@ sfence_vma()
 
 typedef uint64 pte_t;
 typedef uint64 *pagetable_t; // 512 PTEs
+
+//GCC编译器将当前函数调用的栈帧指针存在了寄存器s0
+static inline uint64    //返回当前的帧指针
+r_fp()
+{
+  uint64 x;
+  asm volatile("mv %0, s0" : "=r" (x) );
+  return x;
+}

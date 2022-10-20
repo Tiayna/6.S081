@@ -70,6 +70,9 @@ sys_sleep(void)
     sleep(&ticks, &tickslock);
   }
   release(&tickslock);
+  
+  backtrace();
+
   return 0;
 }
 
@@ -94,4 +97,29 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_sigalarm(void)    //每隔一定cpu时间调用handler
+{
+  int interval;
+  uint64 handler;
+  if(argint(0,&interval)<0||argaddr(1,&handler)<0||interval<0) return -1;
+
+  struct proc* p;
+  p=myproc();
+  p->interval=interval;
+  p->handler=handler;
+  p->ticks=0;
+  return 0;
+}
+
+//每个 handler 函数最后都会调用 sigreturn 函数，用于恢复之前的状态
+uint64
+sys_sigreturn(void)
+{
+  struct proc* p=myproc();
+  *p->trapframe=*p->pretrapframe;
+  p->ticks=0;
+  return 0;
 }

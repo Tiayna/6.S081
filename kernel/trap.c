@@ -58,7 +58,7 @@ usertrap(void)
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
-    p->trapframe->epc += 4;
+    p->trapframe->epc += 4;   //返回下一条指令处
 
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
@@ -78,8 +78,24 @@ usertrap(void)
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)
+  {
+    if(p->interval)
+    {
+      //只有当 sigreturn 执行完成后，ticks 才置为 0，这样就可以等待下一个 handler 执行了
+      if(p->interval==p->ticks)   //经过一定的CPU时间 
+      {
+        //p->ticks=0;
+        *p->pretrapframe=*p->trapframe;  //调用handler之前，存储当前的trapframe，用于调用之后的恢复
+        p->trapframe->epc=p->handler;  //栈帧函数ret返回时，直接调用handler处的指令（执行handler）
+        //在执行好 handler 后，我们希望的是回到用户调用 handler 前的状态。但那时的状态已经被用来调用 handler 函数了
+        //每个 handler 函数最后都会调用 sigreturn 函数，用于恢复之前的状态
+        //如果要恢复状态，需要额外存储 handler 执行前的 trapframe（即更改返回值为 handler 前的 trapframe）
+      }
+      p->ticks++;
+    }
     yield();
-
+  }
+    
   usertrapret();
 }
 
