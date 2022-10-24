@@ -380,13 +380,15 @@ bmap(struct inode *ip, uint bn)
   uint addr, *a;
   struct buf *bp;
 
+  //直接映射 11    addrs[bn]
   if(bn < NDIRECT){
     if((addr = ip->addrs[bn]) == 0)
-      ip->addrs[bn] = addr = balloc(ip->dev);
+      ip->addrs[bn] = addr = balloc(ip->dev);   //分配数据块
     return addr;
   }
-  bn -= NDIRECT;
+  bn -= NDIRECT;  //归零
 
+  //一级间接映射 256     addrs[11][bn]
   if(bn < NINDIRECT){
     // Load indirect block, allocating if necessary.
     if((addr = ip->addrs[NDIRECT]) == 0)
@@ -395,6 +397,33 @@ bmap(struct inode *ip, uint bn)
     a = (uint*)bp->data;
     if((addr = a[bn]) == 0){
       a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
+  bn-=NINDIRECT;   //归零
+
+  //二级间接映射 256*256   addrs[12][bn/256][bn%256]
+  if(bn<NDOUBLYINDIRECT)
+  {
+    // 在需要的时候，载入二级间接数据块  
+    if((addr=ip->addrs[NDIRECT+1])==0)
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);  //缓冲块
+    bp=bread(ip->dev,addr);  //索引到一级数据块表（存放二级数据块表头地址）
+    a=(uint*)bp->data;
+    if((addr=a[bn/NINDIRECT])==0)
+    {
+      a[bn/NINDIRECT]=addr=balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    //重复，创建二级数据块表
+    bp=bread(ip->dev,addr);   //索引到二级数据块表（存放指向数据块的指针）
+    a=(uint*)bp->data;
+    if((addr=a[bn%NINDIRECT])==0)
+    {
+      a[bn%NINDIRECT]=addr=balloc(ip->dev);   //缓冲块
       log_write(bp);
     }
     brelse(bp);
@@ -409,9 +438,11 @@ bmap(struct inode *ip, uint bn)
 void
 itrunc(struct inode *ip)
 {
-  int i, j;
+  int i, j, m, n;
   struct buf *bp;
+  struct buf *bp2;
   uint *a;
+  uint *a2;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -430,6 +461,31 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT+1])
+  {
+    bp=bread(ip->dev,ip->addrs[NDIRECT+1]);   //索引到一级数据块表
+    a=(uint*)bp->data;  
+    for(m=0;m<NINDIRECT;m++)
+    {
+      if(a[m])
+      {
+        bp2=bread(ip->dev,a[m]);    //索引到二级数据块表
+        a2=(uint*)bp2->data;
+        for(n=0;n<NINDIRECT;n++)
+        {
+          if(a2[n])
+            bfree(ip->dev,a2[n]);   //释放数据块
+        }
+        brelse(bp2);
+        bfree(ip->dev,a[m]);  //释放二级数据块表
+        a[m]=0;
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev,ip->addrs[NDIRECT+1]);  //释放一级数据块表
+    ip->addrs[NDIRECT+1]=0;
   }
 
   ip->size = 0;

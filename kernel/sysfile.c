@@ -292,6 +292,8 @@ sys_open(void)
   struct inode *ip;
   int n;
 
+  //int depth=0;  //软链接递归深度
+
   if((n = argstr(0, path, MAXPATH)) < 0 || argint(1, &omode) < 0)
     return -1;
 
@@ -320,6 +322,37 @@ sys_open(void)
     iunlockput(ip);
     end_op();
     return -1;
+  }
+
+  if(ip->type==T_SYMLINK && !(omode & O_NOFOLLOW))
+  {
+    int depth=20;   //软链接递归深度
+    for(int i=0;i<depth;i++)  //递归查找（迭代实现）
+    {
+      if(readi(ip,0,(uint64)path,0,MAXPATH)!=MAXPATH)  //读取inode信息
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      iunlockput(ip);
+
+      ip=namei(path);  //读取到的inode的 path 转换为 索引到的下一个inode
+      if(ip==0)
+      {
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      if(ip->type!=T_SYMLINK) break;  //当前索引到的inode不是软链接，即该文件真正的持有者（被链接对象）
+
+      if(i==depth-1)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
   }
 
   if((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0){
@@ -483,4 +516,37 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+//符号链接（软链接）
+uint64 sys_symlink(void)     //path：当前文件的路径 ； target：链接对象（被链接的文件）
+{
+  char path[MAXPATH],target[MAXPATH];
+  struct inode* ip;
+
+  //从寄存器读取参数
+  if(argstr(0,target,MAXPATH)<0) return -1;
+  if(argstr(1,path,MAXPATH)<0) return -1;
+
+  //开启事务（xv6的文件系统的操作不是立刻执行的，操作是先放在一个缓存文件中的（日志系统），操作添加完后再执行）
+  begin_op();
+  
+  //为符号链接新建一个inode，该inode
+  if((ip=create(path,T_SYMLINK,0,0))==0)
+  {
+    end_op();
+    return -1;
+  }
+
+  //在创建的inode的data中写入target（被链接的文件），作为符号链接
+  if(writei(ip,0,(uint64)target,0,MAXPATH)<MAXPATH)
+  {
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(ip);
+  end_op();
+  return 0;  //成功返回
 }
