@@ -49,3 +49,12 @@ addrs[12]指向二级简介数据块表头（doubly indirect），修改bmap，�
 2、Symbolic links： 添加一个系统调用symlink实现软链接，对该链接文件的操作将转换为对被链接文件的操作；symlink()参数中，路径path为该文件所在路径，目标target为被链接文件的路径
 可通过创建一个新的inode（类型为T_SYMLINK，即软链接），将target记录到这个inode的数据块中；同时修改sys_open，对T_SYMLINK类型进行处理，通过对inode读取数据到path中，实现符号链接，
 迭代（或递归）查找被链接文件，同时定义一个递归深度，判断最终是否查找到文件主（实际拥有者）
+
+七：thread
+第七个实验展示了xv6的“多线程”实现，还有对类似于lock中锁冲突避免的哈希桶冲突避免，以及实现一个barrier来同步所有线程
+1、switching between threads：实现一个用户态的线程调度，实际上在xv6中的“多线程”并非我们如今所说的那么多线程，本质上依旧是多个线程运行在一个CPU上，同时也没有通过类似时钟中断
+之类的实现，而是通过线程自己本身调用yield来调用schedule进行线程调度，xv6具体通过类似进程一样的swich（uthread_swich）来切换上下文，同时需在线程结构体thread中额外添加
+context来记录返回地址和栈地址以及相关寄存器上下文，并在线程调度时调用thread_switch()切换上下文
+2、在多线程情况下，如果线程0调用insert，但未插入完成时，调度了线程1调用insert，此时线程1认为的哈希桶的链表头是原来的表头（而不是线程0插入的元素），就导致切换回线程0时
+发生键值对覆盖，导致数据丢失，于是通过对哈希桶上锁来避免数据丢失
+3、通过条件参数来实现barrier，线程到达point时会调用barrier，直到bstate.nthread到达nthread之前（全部线程抵达），都进入睡眠队列中等待
