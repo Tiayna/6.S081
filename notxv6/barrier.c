@@ -12,7 +12,7 @@ struct barrier {
   pthread_cond_t barrier_cond;
   int nthread;      // Number of threads that have reached this round of the barrier
   int round;     // Barrier round
-} bstate;
+} bstate;   //宏，记录所有barrier信息
 
 static void
 barrier_init(void)
@@ -30,13 +30,24 @@ barrier()
   // Block until all threads have called barrier() and
   // then increment bstate.round.
   //
-  
+  pthread_mutex_lock(&bstate.barrier_mutex);
+  if(++bstate.nthread==nthread)   //所有线程都到达该barrier
+  {
+    bstate.nthread=0;
+    bstate.round++;
+    pthread_cond_broadcast(&bstate.barrier_cond);
+  }
+  else   //还有线程没有到达，则加入睡眠队列
+  {
+    pthread_cond_wait(&bstate.barrier_cond,&bstate.barrier_mutex);
+  }
+  pthread_mutex_unlock(&bstate.barrier_mutex);
 }
 
 static void *
 thread(void *xa)
 {
-  long n = (long) xa;
+  long n = (long) xa;   //线程序号
   long delay;
   int i;
 
