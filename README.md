@@ -5,6 +5,9 @@ MIT OS
 实验尝试学习是在本人大三上半学年中进行，断断续续的一个多月，在对个人能力评估的基础上完成了11个labs中的6个（util,syscall,pgtbl,trap,lock,fs）
 该说明文档简要概述了完成了的labs中的主要代码实现以及部分key要点。
 
+更新，忙完窒息考试周后花了几天把剩下的拓展功能类型的lab补完了，Lazy-Allocation、Copy-On-Write、mmap功能相似的三个
+第11个lab:New Driver，类似于计算机网络和操作系统结合的实验，不如直接进行下一步阶段的计算机网络的实验学习
+
 环境配置：实验运行在vscode内置远端拓展wsl(window subsystem of linux)，wsl链接的是在微软商店中下载的ubuntu(20.04)
 在ubuntu shell中更新（sudo apt-get update...）后，输入课程官网要求配置安装(Installing via APT)项下的一行代码即可完成实验环境搭建
 
@@ -58,3 +61,4 @@ context来记录返回地址和栈地址以及相关寄存器上下文，并在�
 2、在多线程情况下，如果线程0调用insert，但未插入完成时，调度了线程1调用insert，此时线程1认为的哈希桶的链表头是原来的表头（而不是线程0插入的元素），就导致切换回线程0时
 发生键值对覆盖，导致数据丢失，于是通过对哈希桶上锁来避免数据丢失
 3、通过条件参数来实现barrier，线程到达point时会调用barrier，直到bstate.nthread到达nthread之前（全部线程抵达），都进入睡眠队列中等待
+
