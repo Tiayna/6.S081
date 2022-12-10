@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -65,9 +69,52 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  //因为mmap()建立的vma是懒分配设计，只是将mapped的文件记录到vmas中，并没有映射到进程真正的页表
+  //第一次访问映射的虚拟地址时，发生读写缺页失效，在trap中进行实际分配处理
+  else if(r_scause()==13||r_scause()==15){  
+    uint64 va=r_stval();  //获取发生缺页失效的虚拟地址
+    int i;
+    if(va>=p->sz||va<p->trapframe->sp) p->killed=1;    //虚拟地址越界（超出已分配或低于栈区），杀死进程
+    else{
+      for(i=0;i<NVMA;i++)   //遍历所有虚拟内存区域，检查缺页失效的地址是否在某个vma中
+      {
+        if(p->vmas[i].valid==1){   //找到第一个已使用的vma
+          //判断是否在vma中，即缺页失效的虚拟地址范围在vma起始虚址addr的长度范围内
+          if(p->vmas[i].addr<=va&&(p->vmas[i].addr+p->vmas[i].length)>va) break;   
+        }
+      }
+      if(i==NVMA) p->killed=1;  //不在vma，则缺页失效非法，杀死进程
+      else{   //在某个vma中，则进行分配物理页等相应处理
+        uint64 ka=(uint64)kalloc();  //申请分配物理页
+        if(ka==0) p->killed=1;  //申请失败，杀死进程
+        else{  //将要映射的文件内容拷贝到该vma起始地址addr对应的刚分配的页表中
+          memset((void*)ka,0,PGSIZE);
+          va=PGROUNDDOWN(va);  //下行边界
+          ilock(p->vmas[i].mapfile->ip);   //readi之前需要获取锁
+          //映射文件的inode获取存储内容，输入ka是内核地址，读取文件到ka中
+          readi(p->vmas[i].mapfile->ip,0,ka,va-p->vmas[i].addr,PGSIZE);
+          iunlock(p->vmas[i].mapfile->ip);
+          uint64 pm=PTE_U;   //默认文件可达
+          if(p->vmas[i].prot & PROT_READ)  //判断文件是否可读
+            pm |= PTE_R;  //对应设置页表
+          if(p->vmas[i].prot & PROT_WRITE) //判断文件是否可写
+            pm |= PTE_W;  //对应设置页表
+          //建立映射关系：创建进程p从虚拟地址va开始的，页表pagetable中的页表项(pm)，映射到分配到的物理页表ka
+          if(mappages(p->pagetable,va,PGSIZE,ka,pm)!=0)     //va->pte->ka
+          {
+            //建立失败，则释放分配的物理页表，并杀死进程
+            kfree((void*)ka);  
+            p->killed=1;
+          }
+        }
+      }
+    }
+  }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
@@ -217,4 +264,3 @@ devintr()
     return 0;
   }
 }
-

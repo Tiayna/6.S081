@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -113,6 +114,12 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+
+  //进程分配初始化时，也要对进程的虚拟内存区域vmas初始化
+  for(int i=0;i<NVMA;i++)
+  {
+    p->vmas[i].valid=0;  //初始化未被使用
+  }
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -269,11 +276,26 @@ fork(void)
   struct proc *np;
   struct proc *p = myproc();
 
-  // Allocate process.
-  if((np = allocproc()) == 0){
+  // Allocate process.  
+  if((np = allocproc()) == 0){  //创建分配子进程
     return -1;
   }
 
+  //修改fork，保证子进程具有与父进程相同的映射区域
+  //子进程拷贝父进程的mmap虚拟内存到物理磁盘的映射信息
+  for(int i=0;i<NVMA;i++)
+  {
+    if(p->vmas[i].valid==1)  //当前vma被使用
+    {
+      np->vmas[i].valid=1;
+      np->vmas[i].addr=p->vmas[i].addr;
+      np->vmas[i].length=p->vmas[i].length;
+      np->vmas[i].prot=p->vmas[i].prot;
+      np->vmas[i].flags=p->vmas[i].flags;
+      np->vmas[i].mapfile=p->vmas[i].mapfile;
+      filedup(np->vmas[i].mapfile);    //引用计数增加
+    }
+  }
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
@@ -343,6 +365,18 @@ exit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // 修改exit，在程序退出时取消进程vmas映射区域的所有映射
+  for(int i=0;i<NVMA;i++)
+  {
+    if(p->vmas[i].valid==1)  //已被使用
+    {
+      if(p->vmas[i].flags & MAP_SHARED)  //若vma标志为要写回
+        filewrite(p->vmas[i].mapfile,p->vmas[i].addr,p->vmas[i].length);
+      uvmunmap(p->pagetable,p->vmas[i].addr,p->vmas[i].length/PGSIZE,1);  //解除映射
+      fileclose(p->vmas[i].mapfile);   //引用计数减少
+    }
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

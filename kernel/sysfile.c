@@ -484,3 +484,80 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64
+sys_mmap(void)
+{
+  uint64 addr;    //vma起始地址
+  int length,prot,flags,fd,i;   //argint从寄存器传入的参数
+  struct proc* p=myproc();  //当前进程获取
+  //参数读取
+  if((argint(1,&length)<0)||(argint(2,&prot)<0)
+    ||(argint(3,&flags)<0)||(argint(4,&fd)<0)) return -1;
+  struct file* mapfile=p->ofile[fd];   //进程要映射的对应的文件获取
+  
+  //要映射的文件如果不可写，但进程内存可写，且对映射内存的修改要写回的话，则mmap错误
+  if((!mapfile->writable)&&(prot&PROT_WRITE)&&(!(flags&MAP_PRIVATE))) return -1;
+  for(i=0;i<NVMA;i++)   //遍历vmas数组，找到第一个可用的虚拟内存区域
+  {
+    if(p->vmas[i].valid==0){    //设置分配信息
+      p->vmas[i].valid=1;
+      p->vmas[i].addr=addr=p->sz;   //虚拟内存地址从当前进程的内存大小开始（紧跟）
+      p->vmas[i].length=length;
+      p->vmas[i].prot=prot;
+      p->vmas[i].flags=flags;
+      p->vmas[i].mapfile=mapfile;
+      filedup(p->ofile[fd]);    //文件引用计数增加
+      break;
+    }
+  }
+  if(i==NVMA) return -1;  //虚拟内存区域资源耗尽
+  p->sz+=length;   //lazy allocation懒分配，先不分配内存，等后续引发缺页失效时处理
+  return addr;
+}
+
+uint64 sys_munmap(void)
+{
+  uint64 addr;  //要取消mmap的虚拟地址
+  int length;   
+  int i;
+  struct proc* p=myproc();
+  if(argaddr(0,&addr)<0 || argint(1,&length)) return -1;  //从寄存器读取参数数据
+  for(i=0;i<NVMA;i++)  //遍历进程的vma数组
+  {
+    if(p->vmas[i].valid==1)  //如果当前虚拟存储区域被使用
+    {
+      //判断是否为要取消映射关系的对应虚拟地址的vma
+      if(p->vmas[i].addr<=addr && (p->vmas[i].addr+p->vmas[i].length)>addr) break;  
+    }
+  }
+  if(i==NVMA) return -1;   //未查找到相应的vma，返回失败
+  //查找成功，进行解除映射处理
+  struct vma* vma=&p->vmas[i];  //获取相应的vma
+  if(vma->flags & MAP_SHARED){   //判断标志是否为MAP_SHARED，是的话需要将进程对映射内存的修改写回文件
+    filewrite(vma->mapfile,addr,length);  //文件写回，无需考虑脏位Dirty（修改标志）
+  }
+
+  //根据输入的要取消映射的虚拟地址及长度判断unmap规模
+  //使用uvmunmap实现，移除从va开始的n个页表的映射
+  if(vma->addr==addr && vma->length==length)
+  {
+    uvmunmap(p->pagetable,addr,length/PGSIZE,1);  //直接移除从起始addr开始长度length
+    fileclose(vma->mapfile);  //关闭文件，减少引用计数
+    vma->valid=0;   //完整地清空了该vma，回收利用该虚拟存储区域
+  }
+  else if(vma->addr==addr)   //起始地址相同，但要移除的长度不同
+  {
+    //从起始开始unmap
+    uvmunmap(p->pagetable,addr,length/PGSIZE,1);
+    vma->addr+=length;
+    vma->length-=length;
+  }
+  else if(vma->addr+vma->length == addr+length)
+  {
+    //从末端开始unmap
+    uvmunmap(p->pagetable,addr,length/PGSIZE,1);
+    vma->length-=length;
+  }
+  return 0;
+}
