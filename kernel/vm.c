@@ -5,6 +5,8 @@
 #include "riscv.h"
 #include "defs.h"
 #include "fs.h"
+#include "spinlock.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -56,6 +58,7 @@ kvminithart()
   sfence_vma();
 }
 
+//返回虚拟地址va对应的页表pagetable的页表项PTE的地址
 // Return the address of the PTE in page table pagetable
 // that corresponds to virtual address va.  If alloc!=0,
 // create any required page-table pages.
@@ -88,6 +91,7 @@ walk(pagetable_t pagetable, uint64 va, int alloc)
   return &pagetable[PX(0, va)];
 }
 
+//返回虚拟地址对应的物理地址
 // Look up a virtual address, return the physical address,
 // or 0 if not mapped.
 // Can only be used to look up user pages.
@@ -96,15 +100,38 @@ walkaddr(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte;
   uint64 pa;
+  struct proc *p = myproc();   
 
   if(va >= MAXVA)
     return 0;
 
-  pte = walk(pagetable, va, 0);
-  if(pte == 0)
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
+  pte = walk(pagetable, va, 0);   //页表项地址
+  if(pte==0 || (*pte & PTE_V) == 0)
+  {
+    //虚拟地址大于进程分配到的内存空间（堆）或小于进程的栈顶，则非法
+    if(va>=p->sz||va<p->trapframe->sp)
+    {
+      p->killed=1;
+      return 0;
+    }
+    
+    //类似于缺页中断发生时，进行相应的物理页表项分配
+    uint64 ka=(uint64)kalloc();
+    if(ka==0) 
+    {
+      p->killed=1;
+      return 0;   //申请分配失败
+    }
+    //添加相应的映射到进程的页表中（map:va->ka）
+    if(mappages(p->pagetable,va,PGSIZE,ka,PTE_W|PTE_R|PTE_X|PTE_U)!=0)   
+    {
+      kfree((void*)ka);
+      p->killed=1;
+      return 0;
+    }
+    return ka;  //返回此时分配的物理地址
+  }
+    
   if((*pte & PTE_U) == 0)
     return 0;
   pa = PTE2PA(*pte);
@@ -145,6 +172,7 @@ kvmpa(uint64 va)
 // physical addresses starting at pa. va and size might not
 // be page-aligned. Returns 0 on success, -1 if walk() couldn't
 // allocate a needed page-table page.
+// 将申请到的物理页pa映射到用户进程的虚拟地址和页表中
 int
 mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
@@ -181,10 +209,13 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
+      continue;
+      //panic("uvmunmap: walk");
+    //在懒分配设计情况下，用户进程申请的空间，并没有真正分配物理地址，实际仍是invalid的，在uvmunmap时会panic
+    if((*pte & PTE_V) == 0)    
+      continue;    //直接continue跳过
+      //panic("uvmunmap: not mapped");    //在页表项与用户进程虚拟地址没有映射时忽略掉panic
+    if(PTE_FLAGS(*pte) == PTE_V)    
       panic("uvmunmap: not a leaf");
     if(do_free){
       uint64 pa = PTE2PA(*pte);
@@ -231,6 +262,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
   char *mem;
   uint64 a;
 
+  //分配内存，进程新内存大小应比原来的大
   if(newsz < oldsz)
     return oldsz;
 
@@ -258,6 +290,7 @@ uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 uint64
 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz)
 {
+  //缩减内存，进程新内存大小应比原来小
   if(newsz >= oldsz)
     return oldsz;
 
@@ -314,10 +347,14 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
+    //懒分配设计下，申请的内存空间如若未使用，则不会分配相应映射的物理地址
+    //此时会导致父子进程fork()时出现panic，注释掉
     if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
+      continue;
+      //panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      continue;
+      //panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)

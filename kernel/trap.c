@@ -34,7 +34,7 @@ trapinithart(void)
 // called from trampoline.S
 //
 void
-usertrap(void)
+usertrap(void)   //用户中断
 {
   int which_dev = 0;
 
@@ -65,7 +65,35 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  //Lazy-Allocation
+  else if(r_scause()==13||r_scause()==15){   //检测到缺页中断（读或写）
+    uint64 va=r_stval();    //获得发生缺页的虚拟地址
+    if(va>=p->sz || va<p->trapframe->sp)   //如果缺页的虚拟地址大于分配所得的地址或者小于栈顶(不超过堆和栈的界限)
+    {
+      p->killed=1;     //非零则进程被杀死
+    }
+    else
+    {
+      uint64 ka=(uint64)kalloc();   //申请分配一个物理页面
+      if(ka==0)   //申请失败
+      {
+        p->killed=1;   //非零则进程被杀死
+      }
+      else
+      {
+        //仿照uvmalloc
+        memset((void*)ka,0,PGSIZE);
+        va=PGROUNDDOWN(va);   //分配的起始地址，需对齐到页表项的大小边界
+        if(mappages(p->pagetable,va,PGSIZE,ka,PTE_W|PTE_R|PTE_U)!=0)   //将申请到的物理页映射到用户虚拟地址返回0则成功
+        {
+          kfree((void*)va);   //失败则释放掉分配到的地址
+          p->killed=1;   //并杀死进程
+        }
+      }
+    }
+  }
+  else if((which_dev = devintr()) != 0){
     // ok
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
@@ -84,6 +112,7 @@ usertrap(void)
 }
 
 //
+//返回到用户空间
 // return to user space
 //
 void
@@ -168,6 +197,7 @@ clockintr()
   release(&tickslock);
 }
 
+//判断是外界中断还是软件中断并解决他
 // check if it's an external interrupt or software interrupt,
 // and handle it.
 // returns 2 if timer interrupt,

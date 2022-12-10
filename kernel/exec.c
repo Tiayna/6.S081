@@ -142,6 +142,8 @@ loadseg(pagetable_t pagetable, uint64 va, struct inode *ip, uint offset, uint sz
     panic("loadseg: va must be page aligned");
 
   for(i = 0; i < sz; i += PGSIZE){
+    //将虚拟地址传到walkaddr()中得到物理地址
+    //在懒分配设计下，可能会出现传递的合法地址还未被分配物理地址的情况
     pa = walkaddr(pagetable, va + i);
     if(pa == 0)
       panic("loadseg: address should exist");

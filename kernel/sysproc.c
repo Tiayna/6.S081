@@ -38,18 +38,28 @@ sys_wait(void)
   return wait(p);
 }
 
+//虚拟内存到内存的映射
 uint64
 sys_sbrk(void)
 {
   int addr;
   int n;
 
-  if(argint(0, &n) < 0)
+  if(argint(0, &n) < 0)  //保证n>=0，n<0时则减少虚拟内存空间
     return -1;
-  addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
-  return addr;
+  addr = myproc()->sz;   //进程内存大小
+  if(n<0)
+  {
+    uint sz=myproc()->sz;
+    myproc()->sz=uvmdealloc(myproc()->pagetable,sz,sz+n);
+  }
+  else{
+  // 删除growproc(n)
+  // if(growproc(n) < 0)   
+  //   return -1;
+    myproc()->sz+=n;   //但仍需要增加进程分配到的内存大小
+  }
+  return addr;   //返回分配内存的地址
 }
 
 uint64
